@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: BSBT – Owner PDF
- * Description: Owner booking confirmation + payout summary PDF. (V1.9.2 - Gross Added)
- * Version: 1.9.2
+ * Description: Owner booking confirmation + payout summary PDF. (V1.9.3 - Security Hardening)
+ * Version: 1.9.3
  * Author: BS Business Travelling / Stay4Fair.com
  */
 
@@ -19,9 +19,11 @@ final class BSBT_Owner_PDF {
     public static function init() {
         add_action('add_meta_boxes', [__CLASS__, 'register_metabox'], 10, 2);
         add_action('add_meta_boxes_mphb_booking', [__CLASS__, 'register_metabox_direct'], 10, 1);
+
         add_action('admin_post_bsbt_owner_pdf_generate', [__CLASS__, 'admin_generate']);
         add_action('admin_post_bsbt_owner_pdf_open',     [__CLASS__, 'admin_open']);
         add_action('admin_post_bsbt_owner_pdf_resend',   [__CLASS__, 'admin_resend']);
+
         add_action('mphb_booking_status_changed', [__CLASS__, 'maybe_auto_send'], 20, 99);
         add_action('woocommerce_order_status_processing', [__CLASS__, 'woo_processing_fallback'], 20, 1);
         add_action('woocommerce_payment_complete',        [__CLASS__, 'woo_payment_complete_fallback'], 20, 1);
@@ -72,6 +74,7 @@ final class BSBT_Owner_PDF {
         if ($order_id <= 0 || !function_exists('wc_get_order')) return;
         $order = wc_get_order($order_id);
         if (!$order || !($order->is_paid() || in_array($order->get_status(), ['processing','completed']))) return;
+
         foreach ($order->get_items() as $item) {
             $payment_id = 0;
             $meta_data = $item->get_meta_data();
@@ -99,13 +102,17 @@ final class BSBT_Owner_PDF {
         if (!function_exists('bs_bt_try_load_pdf_engine')) return ['ok'=>false];
         $data = self::collect_data($bid);
         if (!$data['ok']) return ['ok'=>false];
+
         $upload = wp_upload_dir();
         $dir = trailingslashit($upload['basedir']).'bsbt-owner-pdf/';
         wp_mkdir_p($dir);
+
         $path = $dir.'Owner_PDF_'.$bid.'.pdf';
+
         try {
             $engine = bs_bt_try_load_pdf_engine();
             $html = self::render_pdf_html($data['data']);
+
             if ($engine === 'mpdf') {
                 $mpdf = new \Mpdf\Mpdf(['format'=>'A4']);
                 $mpdf->WriteHTML($html);
@@ -116,8 +123,10 @@ final class BSBT_Owner_PDF {
                 $dom->render();
                 file_put_contents($path, $dom->output());
             }
+
             self::log($bid, ['path' => $path, 'generated_at' => current_time('mysql'), 'trigger' => $ctx['trigger'] ?? 'ui']);
             return ['ok'=>true, 'path'=>$path];
+
         } catch (\Throwable $e) {
             update_post_meta($bid, self::META_MAIL_LAST_ERR, 'PDF Error: ' . $e->getMessage());
             return ['ok'=>false];
@@ -229,55 +238,203 @@ final class BSBT_Owner_PDF {
 
     public static function render_metabox($post) {
         $bid = (int)$post->ID;
-        $decision = get_post_meta($bid, '_bsbt_owner_decision', true);
+
+        $decision = (string) get_post_meta($bid, '_bsbt_owner_decision', true);
         $status = ($decision === 'approved') ? 'BESTÄTIGT' : (($decision === 'declined') ? 'ABGELEHNT' : 'OFFEN');
         $color  = ($decision === 'approved') ? '#2e7d32' : (($decision === 'declined') ? '#c62828' : '#f9a825');
+
         $sent = (get_post_meta($bid, self::META_MAIL_SENT, true) === '1');
         $nonce = wp_create_nonce('bsbt_owner_pdf_'.$bid);
+
         echo "<div style='font-size:12px;line-height:1.4'>";
-        echo "<p><strong>Entscheidung:</strong> <span style='color:$color'>$status</span></p>";
+        echo "<p><strong>Entscheidung:</strong> <span style='color:" . esc_attr($color) . "'>" . esc_html($status) . "</span></p>";
         echo "<p><strong>E-Mail Status:</strong> " . ($sent ? "<span style='color:#2e7d32'>Versendet</span>" : "<span style='color:#f9a825'>Nicht versendet</span>") . "</p>";
         echo "<hr>";
-        echo "<a class='button' target='_blank' href='".admin_url("admin-post.php?action=bsbt_owner_pdf_open&booking_id=$bid&_wpnonce=$nonce")."'>Öffnen</a> ";
-        echo "<a class='button button-primary' href='".admin_url("admin-post.php?action=bsbt_owner_pdf_generate&booking_id=$bid&_wpnonce=$nonce")."'>Erzeugen</a> ";
-        echo "<a class='button' href='".admin_url("admin-post.php?action=bsbt_owner_pdf_resend&booking_id=$bid&_wpnonce=$nonce")."'>Senden</a>";
+
+        $open   = admin_url("admin-post.php?action=bsbt_owner_pdf_open&booking_id=$bid&_wpnonce=$nonce");
+        $gen    = admin_url("admin-post.php?action=bsbt_owner_pdf_generate&booking_id=$bid&_wpnonce=$nonce");
+        $resend = admin_url("admin-post.php?action=bsbt_owner_pdf_resend&booking_id=$bid&_wpnonce=$nonce");
+
+        echo "<a class='button' target='_blank' href='" . esc_url($open) . "'>Öffnen</a> ";
+        echo "<a class='button button-primary' href='" . esc_url($gen) . "'>Erzeugen</a> ";
+        echo "<a class='button' href='" . esc_url($resend) . "'>Senden</a>";
         echo "</div>";
     }
 
-    public static function admin_generate() { self::guard(); self::generate_pdf((int)$_GET['booking_id'], ['trigger'=>'admin']); wp_redirect(wp_get_referer()); exit; }
+    /* =========================================================
+     * SECURITY / AUTH (ADMIN + OWNER SAFE)
+     * ======================================================= */
+
+    private static function get_booking_owner_id(int $booking_id): int {
+        // 1) direct booking meta (if exists)
+        $oid = (int) get_post_meta($booking_id, 'bsbt_owner_id', true);
+        if ($oid > 0) return $oid;
+
+        // 2) via MPHB -> room_type -> bsbt_owner_id
+        if (!function_exists('MPHB')) return 0;
+
+        try {
+            $b = MPHB()->getBookingRepository()->findById($booking_id);
+            if (!$b) return 0;
+
+            $rooms = $b->getReservedRooms();
+            if (empty($rooms) || !is_object($rooms[0]) || !method_exists($rooms[0], 'getRoomTypeId')) return 0;
+
+            $rt = (int) $rooms[0]->getRoomTypeId();
+            if ($rt <= 0) return 0;
+
+            return (int) get_post_meta($rt, 'bsbt_owner_id', true);
+
+        } catch (\Throwable $e) {
+            return 0;
+        }
+    }
+
+    private static function guard_and_get_booking_id(string $purpose = 'read'): int {
+
+        if (!is_user_logged_in()) {
+            wp_die('No permission.');
+        }
+
+        $bid = isset($_GET['booking_id']) ? (int) $_GET['booking_id'] : 0;
+        if ($bid <= 0) {
+            wp_die('Invalid booking id.');
+        }
+
+        // Nonce (works for admin + owner)
+        $nonce = isset($_GET['_wpnonce']) ? (string) $_GET['_wpnonce'] : '';
+        if (!$nonce || !wp_verify_nonce($nonce, 'bsbt_owner_pdf_'.$bid)) {
+            wp_die('Invalid nonce.');
+        }
+
+        // Capability / object-level authorization
+        if (current_user_can('manage_options')) {
+            return $bid;
+        }
+
+        // Owner role: allow ONLY if booking belongs to current owner
+        $u = wp_get_current_user();
+        $is_owner = in_array('owner', (array)$u->roles, true);
+
+        if ($is_owner) {
+            $owner_id = self::get_booking_owner_id($bid);
+            if ($owner_id > 0 && $owner_id === get_current_user_id()) {
+                return $bid;
+            }
+            wp_die('Not your booking.');
+        }
+
+        // Everyone else denied
+        wp_die('No permission.');
+    }
+
+    private static function safe_redirect_back(): void {
+        $to = wp_get_referer();
+        if (!$to) $to = admin_url('edit.php?post_type=mphb_booking');
+        wp_safe_redirect($to);
+        exit;
+    }
+
+    private static function safe_path_in_uploads(?string $path): bool {
+        if (!$path) return false;
+
+        $upload = wp_upload_dir();
+        $base   = trailingslashit($upload['basedir']) . 'bsbt-owner-pdf/';
+
+        $p = wp_normalize_path((string)$path);
+        $b = wp_normalize_path((string)$base);
+
+        return (strpos($p, $b) === 0);
+    }
+
+    /* =========================================================
+     * ADMIN POST HANDLERS (HARDENED)
+     * ======================================================= */
+
+    public static function admin_generate() {
+        $bid = self::guard_and_get_booking_id('write');
+        self::generate_pdf($bid, ['trigger'=>'admin_generate']);
+        self::safe_redirect_back();
+    }
+
     public static function admin_open() {
-        self::guard(); $bid = (int)$_GET['booking_id']; 
-        $log = get_post_meta($bid, self::META_LOG, true); $last = is_array($log) ? end($log) : null;
-        if (!$last || !file_exists($last['path'])) wp_die('PDF Datei nicht gefunden.');
-        header('Content-Type: application/pdf'); readfile($last['path']); exit;
+        $bid = self::guard_and_get_booking_id('read');
+
+        $path = '';
+        $log = get_post_meta($bid, self::META_LOG, true);
+        $last = is_array($log) ? end($log) : null;
+        if ($last && !empty($last['path'])) {
+            $path = (string) $last['path'];
+        }
+
+        // If missing -> generate once (keeps owner UX stable)
+        if (!$path || !file_exists($path)) {
+            $res = self::generate_pdf($bid, ['trigger'=>'open_autogen']);
+            if (!empty($res['ok']) && !empty($res['path']) && file_exists($res['path'])) {
+                $path = (string) $res['path'];
+            }
+        }
+
+        if (!$path || !file_exists($path)) {
+            wp_die('PDF Datei nicht gefunden.');
+        }
+
+        // Ensure file is within uploads/bsbt-owner-pdf/
+        if (!self::safe_path_in_uploads($path)) {
+            wp_die('Invalid file path.');
+        }
+
+        header('Content-Type: application/pdf');
+        header('Content-Disposition: inline; filename="Owner_PDF_' . (int)$bid . '.pdf"');
+        header('X-Content-Type-Options: nosniff');
+
+        readfile($path);
+        exit;
     }
+
     public static function admin_resend() {
-        self::guard(); $bid = (int)$_GET['booking_id']; 
-        delete_post_meta($bid, self::META_MAIL_SENT); 
+        $bid = self::guard_and_get_booking_id('write');
+
+        // Admin-only resend (even if owner hits it by URL)
+        if (!current_user_can('manage_options')) {
+            wp_die('No permission.');
+        }
+
+        delete_post_meta($bid, self::META_MAIL_SENT);
         self::maybe_auto_send($bid, 'confirmed', 'force_trigger');
-        wp_redirect(wp_get_referer()); exit;
+
+        self::safe_redirect_back();
     }
-    private static function guard() { check_admin_referer('bsbt_owner_pdf_'.(int)$_GET['booking_id']); }
+
+    /* =========================
+     * MAIL
+     * ========================= */
 
     private static function email_owner($bid, $path) {
         $to = self::get_owner_email($bid);
         if (!$to || !file_exists($path)) return false;
-        $subject = 'Buchungsbestätigung – Stay4Fair #' . $bid;
+
+        $subject = 'Buchungsbestätigung – Stay4Fair #' . (int)$bid;
         $msg = "Guten Tag,\n\nanbei erhalten Sie die Bestätigung für die neue Buchung #$bid.\n\nMit freundlichen Grüßen\nStay4Fair Team";
+
         return wp_mail($to, $subject, $msg, ['Content-Type: text/plain; charset=UTF-8'], [$path]);
     }
 
     private static function get_owner_email($bid) {
         if (!function_exists('MPHB')) return '';
-        $b = MPHB()->getBookingRepository()->findById($bid); if (!$b) return '';
+        $b = MPHB()->getBookingRepository()->findById((int)$bid); if (!$b) return '';
         $rooms = $b->getReservedRooms(); if (empty($rooms)) return '';
         $rt = $rooms[0]->getRoomTypeId();
+
+        // NOTE: пока legacy, позже переведём на bsbt_owner_id -> user_meta resolver
         return trim((string)get_post_meta($rt, 'owner_email', true)) ?: trim((string)get_post_meta($rt, self::ACF_OWNER_EMAIL_KEY, true));
     }
 
     private static function log($bid, $row) {
-        $log = get_post_meta($bid, self::META_LOG, true) ?: []; $log[] = $row;
+        $log = get_post_meta($bid, self::META_LOG, true) ?: [];
+        $log[] = $row;
         update_post_meta($bid, self::META_LOG, $log);
     }
 }
+
 BSBT_Owner_PDF::init();
