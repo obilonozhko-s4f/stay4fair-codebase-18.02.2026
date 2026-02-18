@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: BSBT – Owner Finances
- * Description: Финансовый отчет владельца на базе Snapshot. (V1.2.8 - SNAPSHOT FIRST, DECISION SAFE)
- * Version: 1.2.8
+ * Description: Финансовый отчет владельца на базе Snapshot. (V1.2.9 - Pagination Added)
+ * Version: 1.2.9
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -42,6 +42,9 @@ final class BSBT_Owner_Finances {
         $is_admin = current_user_can('manage_options');
         $selected_year = isset($_GET['f_year']) ? (int)$_GET['f_year'] : (int)date('Y');
 
+        // ✅ Pagination (ADDED)
+        $paged = max(1, (int)($_GET['paged'] ?? 1));
+
         /**
          * IMPORTANT:
          * Мы НЕ фильтруем по _bsbt_owner_decision на уровне WP_Query,
@@ -51,7 +54,13 @@ final class BSBT_Owner_Finances {
         $args = [
             'post_type'      => 'mphb_booking',
             'post_status'    => 'any',
-            'posts_per_page' => -1,
+
+            // ✅ CHANGED ONLY THIS: was -1
+            'posts_per_page' => 25,
+
+            // ✅ Pagination (ADDED)
+            'paged'          => $paged,
+
             'meta_key'       => 'mphb_check_in_date',
             'meta_type'      => 'DATE',
             'orderby'        => 'meta_value',
@@ -271,6 +280,24 @@ final class BSBT_Owner_Finances {
                     <?php endif; ?>
                 </table>
             </div>
+
+            <?php if ( $query->max_num_pages > 1 ): ?>
+                <div style="margin-top:18px; text-align:right;">
+                    <?php
+                    echo paginate_links([
+                        'total'   => $query->max_num_pages,
+                        'current' => $paged,
+                        'format'  => '?paged=%#%',
+                        'add_args' => [
+                            'f_year' => $selected_year
+                        ],
+                        'prev_text' => '«',
+                        'next_text' => '»',
+                    ]);
+                    ?>
+                </div>
+            <?php endif; ?>
+
         </div>
         <?php
         return ob_get_clean();
