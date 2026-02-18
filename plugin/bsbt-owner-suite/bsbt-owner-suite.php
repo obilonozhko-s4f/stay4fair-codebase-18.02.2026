@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: BSBT – Owner Suite (WhatsApp + Decision)
- * Description: Owner communication (WhatsApp) + Admin decision using Owner Portal logic.
- * Version: 1.4.2
+ * Plugin Name: BSBT – Owner Suite (WhatsApp + Admin UI)
+ * Description: Owner communication (WhatsApp) + Admin UI. Decision logic delegated to Owner Portal Core.
+ * Version: 1.5.0
  * Author: BS Business Travelling
  */
 
@@ -13,6 +13,21 @@ if (!defined('ABSPATH')) exit;
  * ======================================================= */
 if (defined('BSBT_OWNER_SUITE_LOADED')) return;
 define('BSBT_OWNER_SUITE_LOADED', true);
+
+/*
+|--------------------------------------------------------------------------
+| IMPORTANT ARCHITECTURE NOTE (V1.5.0)
+|--------------------------------------------------------------------------
+| This plugin NO LONGER handles booking decision logic.
+| All decisions (approve/decline/expire) are delegated to:
+| BSBT_Owner_Decision_Core (Owner Portal plugin).
+|
+| This file is now UI-only:
+| - WhatsApp communication
+| - Admin Metabox
+| - Snapshot-first payout preview
+|--------------------------------------------------------------------------
+*/
 
 /* =========================================================
  * LOAD ADMIN COLUMNS
@@ -48,22 +63,18 @@ function bsbt_os_get_guests($booking_id): int {
 }
 
 /* =========================================================
- * SNAPSHOT-FIRST PAYOUT LOGIC
+ * SNAPSHOT-FIRST PAYOUT LOGIC (READ-ONLY)
  * ======================================================= */
-/**
- * RU: Всегда сначала берём snapshot (замороженную сумму).
- * EN: Always use snapshot payout first (frozen enterprise logic).
- */
 function bsbt_os_calc_payout($booking_id): float {
 
-    // 1️⃣ Snapshot priority
+    // 1️⃣ Snapshot priority (immutable financial truth)
     $snapshot = get_post_meta($booking_id, '_bsbt_snapshot_owner_payout', true);
 
     if ($snapshot !== '' && $snapshot !== null) {
         return (float) $snapshot;
     }
 
-    // 2️⃣ Fallback (legacy calculation before confirmation)
+    // 2️⃣ Legacy preview fallback (BEFORE confirmation only)
     $rt = bsbt_os_get_room_type_id($booking_id);
     if (!$rt) return 0.0;
 
@@ -83,8 +94,12 @@ function bsbt_os_calc_payout($booking_id): float {
  * WHATSAPP MESSAGE
  * ======================================================= */
 function bsbt_os_build_whatsapp_text($booking_id): string {
+
     $rt = bsbt_os_get_room_type_id($booking_id);
+
+    // ⚠️ Legacy fallback (to be migrated to owner resolver)
     $owner = (string)get_post_meta($rt,'owner_name',true) ?: 'Guten Tag';
+
     $apt   = $rt ? (get_the_title($rt) ?: '—') : '—';
     $in    = (string)get_post_meta($booking_id,'mphb_check_in_date',true);
     $out   = (string)get_post_meta($booking_id,'mphb_check_out_date',true);
@@ -103,9 +118,8 @@ function bsbt_os_whatsapp_url($booking_id): string {
     return 'https://wa.me/'.$phone.'?text='.rawurlencode(bsbt_os_build_whatsapp_text($booking_id));
 }
 
-
 /* =========================================================
- * ADMIN METABOX
+ * ADMIN METABOX (UI ONLY)
  * ======================================================= */
 add_action('add_meta_boxes', function(){
     if (!current_user_can('manage_options')) return;
@@ -120,6 +134,14 @@ add_action('add_meta_boxes', function(){
 });
 
 function bsbt_os_render_box($post){
+
+    if (!class_exists('BSBT_Owner_Decision_Core')) {
+        echo "<div style='color:#c62828;font-weight:600'>
+            Owner Portal Core not loaded.
+        </div>";
+        return;
+    }
+
     $bid = (int)$post->ID;
 
     $decision = (string)get_post_meta($bid,'_bsbt_owner_decision',true);
@@ -135,11 +157,13 @@ function bsbt_os_render_box($post){
     $nonce = wp_create_nonce('bsbt_owner_action');
     $ajax = admin_url('admin-ajax.php');
 
-    $status = 'OFFEN'; $color='#f9a825';
+    $status = 'OFFEN'; 
+    $color='#f9a825';
     if ($decision==='approved'){ $status='BESTÄTIGT'; $color='#2e7d32'; }
     if ($decision==='declined'){ $status='ABGELEHNT'; $color='#c62828'; }
 
     echo "<div style='font-size:12px;line-height:1.45'>";
+
     echo "<p><strong>Status:</strong> <span style='color:$color;font-weight:700'>$status</span></p>";
     echo "<p><strong>Owner:</strong> ".($owner_id?'🟢 registriert':'🔴 nicht registriert')."</p>";
     echo "<p><strong>Auszahlung:</strong> {$pay} €</p>";
@@ -180,6 +204,7 @@ function bsbt_os_render_box($post){
 
     echo "</div>";
     ?>
+
     <script>
     (function(){
         const ajax = <?php echo json_encode($ajax); ?>;
@@ -193,51 +218,14 @@ function bsbt_os_render_box($post){
             d.append('action',c?'bsbt_confirm_booking':'bsbt_reject_booking');
             d.append('booking_id',b.dataset.id);
             d.append('_wpnonce',b.dataset.nonce);
-            fetch(ajax,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:d})
-                .then(()=>location.reload());
+            fetch(ajax,{
+                method:'POST',
+                headers:{'Content-Type':'application/x-www-form-urlencoded'},
+                body:d
+            }).then(()=>location.reload());
         });
     })();
     </script>
+
     <?php
 }
-
-/* =========================================================
- * AJAX HANDLERS (SECURED + LOGGED)
- * ======================================================= */
-add_action('wp_ajax_bsbt_confirm_booking', function(){
-    check_ajax_referer('bsbt_owner_action');
-    if (!current_user_can('manage_options')) wp_send_json_error();
-
-    $id = (int)($_POST['booking_id'] ?? 0);
-    if ($id<=0) wp_send_json_error();
-
-    if (get_post_meta($id,'_bsbt_owner_decision',true)){
-        wp_send_json_error(['message'=>'Already decided']);
-    }
-
-    update_post_meta($id,'_bsbt_owner_decision','approved');
-    update_post_meta($id,'_bsbt_owner_decision_source','admin_manual');
-    update_post_meta($id,'_bsbt_owner_decision_user_id',get_current_user_id());
-    update_post_meta($id,'_bsbt_owner_decision_time',current_time('mysql'));
-
-    wp_send_json_success();
-});
-
-add_action('wp_ajax_bsbt_reject_booking', function(){
-    check_ajax_referer('bsbt_owner_action');
-    if (!current_user_can('manage_options')) wp_send_json_error();
-
-    $id = (int)($_POST['booking_id'] ?? 0);
-    if ($id<=0) wp_send_json_error();
-
-    if (get_post_meta($id,'_bsbt_owner_decision',true)){
-        wp_send_json_error(['message'=>'Already decided']);
-    }
-
-    update_post_meta($id,'_bsbt_owner_decision','declined');
-    update_post_meta($id,'_bsbt_owner_decision_source','admin_manual');
-    update_post_meta($id,'_bsbt_owner_decision_user_id',get_current_user_id());
-    update_post_meta($id,'_bsbt_owner_decision_time',current_time('mysql'));
-
-    wp_send_json_success();
-});
