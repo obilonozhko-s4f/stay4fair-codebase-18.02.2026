@@ -1,0 +1,331 @@
+/* =========================================================
+   BSBT OWNER BOOKINGS – FINAL CLEAN (V7.6 STABLE)
+   ========================================================= */
+
+:root {
+    --bsbt-header-offset: 160px;
+}
+
+/* =========================================================
+   GLOBAL VIEWPORT PROTECTION
+   ========================================================= */
+html, body {
+    max-width: 100vw;
+    overflow-x: hidden;
+}
+
+/* =========================================================
+   CONTAINER
+   ========================================================= */
+.bsbt-container {
+    max-width: 1300px;
+    margin: 0 auto;
+    padding: 20px;
+    padding-top: 0; /* offset управляется Elementor */
+    font-family: inherit;
+    box-sizing: border-box;
+}
+
+/* =========================================================
+   PAGE HEADER
+   ========================================================= */
+.bsbt-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 30px;
+}
+
+.bsbt-header h1 {
+    color: #082567;
+    font-weight: 900;
+    margin: 0;
+    font-size: 32px;
+}
+
+/* =========================================================
+   BUTTON BASE (ORIGINAL)
+   ========================================================= */
+.bsbt-btn-base {
+    position: relative !important;
+    overflow: hidden !important;
+    border-radius: 10px !important;
+    border: none !important;
+    cursor: pointer !important;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    transition: all 0.25s ease !important;
+    box-shadow:
+        0 14px 28px rgba(0,0,0,0.45),
+        0 4px 8px rgba(0,0,0,0.25),
+        inset 0 -5px 10px rgba(0,0,0,0.5),
+        inset 0 1px 0 rgba(255,255,255,0.3) !important;
+}
+
+.bsbt-btn-base::before {
+    content: "";
+    position: absolute;
+    top: 2%;
+    left: 6%;
+    width: 88%;
+    height: 55%;
+    background: radial-gradient(
+        ellipse at center,
+        rgba(255,255,255,0.65) 0%,
+        rgba(255,255,255,0) 72%
+    );
+    transform: scaleY(0.48);
+    filter: blur(5px);
+    opacity: 0.55;
+    pointer-events: none;
+}
+
+/* =========================================================
+   TABLE
+   ========================================================= */
+.bsbt-card {
+    background: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 15px 45px rgba(0,0,0,0.1);
+    overflow: hidden;
+}
+
+.bsbt-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+.bsbt-table thead {
+    background: #082567;
+    color: #ffffff;
+}
+
+.bsbt-table th,
+.bsbt-table td {
+    padding: 20px 15px;
+    border-bottom: 1px solid #eeeeee;
+    vertical-align: top;
+}
+
+/* Columns */
+.bsbt-table th:nth-child(1),
+.bsbt-table td:nth-child(1) { width: 20%; }
+
+.bsbt-table th:nth-child(2),
+.bsbt-table td:nth-child(2) { width: 22%; }
+
+.bsbt-table th:nth-child(3),
+.bsbt-table td:nth-child(3) { width: 20%; }
+
+.bsbt-table th:nth-child(4),
+.bsbt-table td:nth-child(4) { width: 10%; }
+
+.bsbt-table th:nth-child(5),
+.bsbt-table td:nth-child(5) { width: 10%; }
+
+.bsbt-table th:nth-child(6),
+.bsbt-table td:nth-child(6) {
+    width: 18%;
+    text-align: center;
+}
+
+/* =========================================================
+   TEXT
+   ========================================================= */
+.t-bold {
+    display: block;
+    font-size: 15px;
+    font-weight: 700;
+    color: #082567;
+}
+
+.t-gray {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: #64748b;
+    margin-top: 4px;
+}
+
+.badge-new {
+    display: inline-block;
+    margin-bottom: 6px;
+    padding: 3px 8px;
+    background: #ff3b30;
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: 800;
+    border-radius: 6px;
+}
+
+.apt-name-static {
+    display: block;
+    margin-top: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #007AFF;
+}
+
+/* =========================================================
+   CONTACT BUTTONS
+   ========================================================= */
+.contact-box {
+    display: flex;
+    gap: 6px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+}
+
+.contact-box a {
+    position: relative !important;
+    overflow: hidden !important;
+    display: inline-flex !important;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    text-decoration: none !important;
+    color: #ffffff !important;
+    transition: all 0.2s ease !important;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2), inset 0 -2px 4px rgba(0,0,0,0.3) !important;
+}
+
+.contact-box a::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to bottom, rgba(255,255,255,0.2), transparent 50%);
+    pointer-events: none;
+}
+
+.contact-box a[href*="wa.me"] { background-color: #25D366 !important; }
+.contact-box a[href^="tel:"] { background-color: #0ea5e9 !important; }
+.contact-box a[href^="mailto:"] { background-color: #64748b !important; }
+
+.contact-box a:hover {
+    background-color: #E0B849 !important;
+    color: #082567 !important;
+    transform: translateY(-1px);
+}
+
+/* =========================================================
+   ACTION BUTTONS
+   ========================================================= */
+.bsbt-table td:nth-child(6) .bsbt-btn-base {
+    width: 160px !important;
+    margin: 0 auto 12px auto;
+    padding: 10px 0;
+}
+
+.btn-action-confirm {
+    background-color: #22c55e !important;
+    color: #ffffff !important;
+}
+.btn-action-confirm:hover {
+    background-color: #E0B849 !important;
+    color: #082567 !important;
+    transform: translateY(-2px);
+}
+
+.btn-action-reject {
+    background-color: #ef4444 !important;
+    color: #ffffff !important;
+}
+.btn-action-reject:hover {
+    background-color: #ffffff !important;
+    color: #ef4444 !important;
+    box-shadow: inset 0 0 0 2px #ef4444 !important;
+    transform: translateY(-2px);
+}
+
+/* =========================================================
+   RESPONSIVE – TABLET
+   ========================================================= */
+@media (max-width: 1024px) {
+    .bsbt-container {
+        padding: 15px;
+        width: 100%;
+    }
+    .bsbt-table { table-layout: auto; }
+}
+
+/* =========================================================
+   RESPONSIVE – MOBILE (SAFE)
+   ========================================================= */
+@media (max-width: 767px) {
+
+    .bsbt-container {
+        padding: 10px !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow-x: hidden !important;
+    }
+
+    .bsbt-card {
+        background: transparent !important;
+        box-shadow: none !important;
+    }
+
+    .bsbt-table thead { display: none !important; }
+
+    .bsbt-table,
+    .bsbt-table tbody,
+    .bsbt-table tr,
+    .bsbt-table td {
+        display: block !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+        overflow-wrap: break-word;
+        word-break: break-word;
+    }
+
+    .bsbt-table td * {
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+    }
+
+    .bsbt-table tr {
+        margin-bottom: 25px !important;
+        border: 1px solid #082567;
+        border-radius: 12px;
+        background: #fff;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        overflow: hidden;
+    }
+
+    .bsbt-table td:nth-child(6) {
+        padding: 20px !important;
+        background: #fdfdfd;
+        text-align: center !important;
+    }
+
+    .bsbt-table td:nth-child(6) .bsbt-btn-base {
+        width: 100% !important;
+        margin-bottom: 10px !important;
+    }
+
+       /* 🔥 MOBILE FIX – только WhatsApp / Call */
+    .contact-box {
+        display: flex !important;
+        flex-direction: column !important;
+        flex-wrap: nowrap !important;
+        gap: 10px !important;
+    }
+
+    .contact-box a {
+        width: 100% !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        text-align: center !important;
+        padding: 12px 0 !important;
+        line-height: normal !important;
+    }
+
+
+}

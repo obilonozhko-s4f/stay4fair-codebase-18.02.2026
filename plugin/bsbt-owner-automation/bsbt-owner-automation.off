@@ -1,0 +1,321 @@
+<?php
+/**
+ * Plugin Name: BSBT – Owner Automation (Decision Links)
+ * Description: Version 0.1.6 - Full restoration of UI/Emails + Multi-stage Payment Trigger.
+ * Version: 0.1.6
+ * Author: BS Business Travelling / Stay4Fair.com
+ */
+
+if (!defined('ABSPATH')) exit;
+
+final class BSBT_Owner_Automation {
+
+    // Pages (slugs)
+    const PAGE_CONFIRM = 'owner-confirm';
+    const PAGE_DECLINE = 'owner-decline';
+
+    // Flow meta
+    const FLOW_META_FALLBACK = '_bsbt_flow_mode'; 
+
+    // Decision meta
+    const META_SENT_AT   = '_bsbt_owner_decision_sent_at';
+    const META_TOKEN     = '_bsbt_owner_decision_token';
+    const META_DECISION  = '_bsbt_owner_decision';
+    const META_DEC_TIME  = '_bsbt_owner_decision_time';
+    const META_DEC_IP    = '_bsbt_owner_decision_ip';
+    const META_DEC_UA    = '_bsbt_owner_decision_ua';
+
+    const META_PAYREQ_TRIED = '_bsbt_owner_payreq_tried';
+    const META_PAYREQ_OK    = '_bsbt_owner_payreq_ok';
+    const META_PAYREQ_AT    = '_bsbt_owner_payreq_at';
+
+    const META_REMINDER_SCHEDULED = '_bsbt_owner_payreq_reminder_scheduled';
+    const META_REMINDER_SENT      = '_bsbt_owner_payreq_reminder_sent';
+    const META_REMINDER_SENT_AT   = '_bsbt_owner_payreq_reminder_sent_at';
+
+    const TTL_HOURS = 24;
+    const REMINDER_AFTER_HOURS = 6;
+    const ADMIN_ALERT_EMAIL = 'business@stay4fair.com';
+    const CRON_HOOK_REMINDER = 'bsbt_owner_automation_payreq_reminder';
+
+    private static $is_processing = false;
+
+    public static function init() {
+        register_activation_hook(__FILE__, [__CLASS__, 'on_activate']);
+        add_action('add_meta_boxes_mphb_booking', [__CLASS__, 'add_metabox']);
+        add_action('add_meta_boxes_mphb_booking', [__CLASS__, 'add_log_metabox']);
+        add_action('template_redirect', [__CLASS__, 'maybe_handle_owner_decision'], 5);
+        add_action('parse_request', [__CLASS__, 'maybe_handle_owner_decision_fallback'], 5);
+        add_shortcode('bsbt_owner_confirm_page', [__CLASS__, 'shortcode_confirm']);
+        add_shortcode('bsbt_owner_decline_page', [__CLASS__, 'shortcode_decline']);
+        add_action(self::CRON_HOOK_REMINDER, [__CLASS__, 'cron_send_payment_reminder'], 10, 1);
+    }
+
+    /* =========================================================
+     * МЕХАНИКА ОТПРАВКИ ПЛАТЕЖА (УСИЛЕННАЯ)
+     * ======================================================= */
+    private static function trigger_payment_request_direct(int $booking_id): bool {
+        if (!function_exists('mphbrp')) return false;
+        
+        try {
+            // Способ 1: Прямой вызов через API плагина
+            $rp = mphbrp()->getPaymentRequests();
+            if ($rp && method_exists($rp, 'sendDefaultRequest')) {
+                $rp->sendDefaultRequest($booking_id);
+                return true;
+            }
+            
+            // Способ 2: Через Action Hook
+            do_action('mphbrp_send_payment_request', $booking_id, 'full');
+            
+            return true;
+        } catch (\Throwable $e) {
+            error_log('BSBT Payment Trigger Error: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /* =========================================================
+     * ОБРАБОТКА РЕШЕНИЯ (С ЗАЩИТОЙ)
+     * ======================================================= */
+    public static function maybe_handle_owner_decision_fallback($wp) {
+        $req = isset($wp->request) ? rtrim((string)$wp->request, '/') : '';
+        if ($req === self::PAGE_CONFIRM || $req === self::PAGE_DECLINE) {
+            self::process_decision_if_present();
+        }
+    }
+
+    public static function maybe_handle_owner_decision() {
+        if (is_page([self::PAGE_CONFIRM, self::PAGE_DECLINE])) {
+            self::process_decision_if_present();
+        }
+    }
+
+    private static function process_decision_if_present() {
+        if (self::$is_processing) return;
+
+        $booking_id = isset($_GET['b']) ? (int) $_GET['b'] : 0;
+        $action_raw = isset($_GET['a']) ? (string) $_GET['a'] : '';
+        $token_get  = isset($_GET['t']) ? (string) $_GET['t'] : '';
+        $sent_at    = isset($_GET['s']) ? (int) $_GET['s'] : 0;
+        $sig        = isset($_GET['sig']) ? (string) $_GET['sig'] : '';
+
+        if ($booking_id <= 0 || empty($sig)) return;
+
+        // Anti-race condition lock
+        $lock_key = 'bsbt_lock_v2_' . $booking_id;
+        if (get_transient($lock_key)) return;
+        set_transient($lock_key, '1', 10);
+
+        self::$is_processing = true;
+
+        // Security check
+        $expected = hash_hmac('sha256', $booking_id.'|'.$action_raw.'|'.$token_get.'|'.$sent_at, NONCE_SALT);
+        if (!hash_equals($expected, $sig)) {
+            delete_transient($lock_key);
+            self::redirect_clean(['result'=>'invalid']);
+        }
+
+        // Already processed check
+        $existing = get_post_meta($booking_id, self::META_DECISION, true);
+        if (in_array($existing, ['approved', 'declined'])) {
+            delete_transient($lock_key);
+            self::redirect_clean(['result'=>'already']);
+        }
+
+        $decision = ($action_raw === 'yes') ? 'approved' : 'declined';
+        update_post_meta($booking_id, self::META_DECISION, $decision);
+        update_post_meta($booking_id, self::META_DEC_TIME, current_time('mysql'));
+        update_post_meta($booking_id, self::META_DEC_IP, $_SERVER['REMOTE_ADDR'] ?? '');
+        update_post_meta($booking_id, self::META_DEC_UA, $_SERVER['HTTP_USER_AGENT'] ?? '');
+
+        if ($decision === 'approved') {
+            $ok = self::trigger_payment_request_direct($booking_id);
+            update_post_meta($booking_id, self::META_PAYREQ_TRIED, 1);
+            update_post_meta($booking_id, self::META_PAYREQ_OK, $ok ? 1 : 0);
+            update_post_meta($booking_id, self::META_PAYREQ_AT, current_time('mysql'));
+            
+            if (!$ok) {
+                self::notify_admin_payment_failed($booking_id);
+                self::schedule_payment_reminder($booking_id);
+            }
+        } else {
+            self::notify_admin_declined($booking_id);
+        }
+
+        delete_transient($lock_key);
+        self::redirect_clean(['result'=>'ok']);
+    }
+
+    /* =========================================================
+     * UI & METABOXES (RESTORATION)
+     * ======================================================= */
+    public static function add_metabox() {
+        add_meta_box('bsbt-owner-box', 'BSBT – Owner Automation (AUTO)', [__CLASS__, 'render_metabox'], 'mphb_booking', 'side', 'high');
+    }
+
+    public static function render_metabox($post) {
+        $booking_id = (int)$post->ID;
+        if (!self::is_auto_flow($booking_id)) {
+            echo '<div style="font-size:12px;color:#666;"><strong>Manual flow</strong><br>Disabled.</div>';
+            return;
+        }
+
+        $msg = self::build_owner_message($booking_id);
+        $wa_url = self::build_wa_link($booking_id, $msg);
+        $decision = (string) get_post_meta($booking_id, self::META_DECISION, true);
+
+        echo '<div style="font-size:12px;line-height:1.35;">';
+        if ($decision === 'approved') {
+            echo '<div style="margin-bottom:10px;padding:8px;background:#f6fff6;border:1px solid #c8e6c9;border-radius:6px;">✅ <strong>Owner confirmed</strong></div>';
+        } elseif ($decision === 'declined') {
+            echo '<div style="margin-bottom:10px;padding:8px;background:#fff6f6;border:1px solid #ffcdd2;border-radius:6px;">❌ <strong>Owner declined</strong></div>';
+        }
+
+        echo '<label><strong>WhatsApp text</strong></label>';
+        echo '<textarea id="bsbt-msg" style="width:100%;min-height:140px;font-size:11px;margin-top:4px;">'.esc_textarea($msg).'</textarea>';
+        echo '<div style="display:flex;gap:5px;margin-top:8px;">';
+        echo '<a class="button button-primary" style="flex:1;text-align:center;" target="_blank" href="'.esc_url($wa_url).'">Open WA</a>';
+        echo '<button type="button" class="button" style="flex:1;" onclick="var e=document.getElementById(\'bsbt-msg\');e.select();document.execCommand(\'copy\');">Copy</button>';
+        echo '</div></div>';
+    }
+
+    public static function add_log_metabox() {
+        add_meta_box('bsbt-log-box', 'BSBT – Owner Decision Log', [__CLASS__, 'render_log_metabox'], 'mphb_booking', 'side', 'default');
+    }
+
+    public static function render_log_metabox($post) {
+        $bid = (int)$post->ID;
+        $dec = get_post_meta($bid, self::META_DECISION, true);
+        $pay_ok = get_post_meta($bid, self::META_PAYREQ_OK, true);
+        echo '<div style="font-size:11px;">';
+        echo '<div><strong>Decision:</strong> '.esc_html($dec ?: '—').'</div>';
+        echo '<div><strong>Payment OK:</strong> '.($pay_ok === '1' ? 'Yes' : 'No').'</div>';
+        echo '<div><strong>IP:</strong> '.esc_html(get_post_meta($bid, self::META_DEC_IP, true) ?: '—').'</div>';
+        echo '</div>';
+    }
+
+    /* =========================================================
+     * MESSAGE BUILDER (ORIGINAL)
+     * ======================================================= */
+    private static function build_owner_message(int $booking_id): string {
+        $type_id = self::get_room_type_id($booking_id);
+        $owner_name = (string)get_post_meta($type_id, 'owner_name', true);
+        $address = (string)get_post_meta($type_id, 'address', true);
+        $rate = (float)get_post_meta($type_id, 'owner_price_per_night', true);
+        
+        $title = (string)get_the_title($type_id);
+        $apt_code = preg_match('/\bID\s*([0-9]+)\b/i', $title, $m) ? ('ID' . $m[1]) : (string)get_post_meta($type_id, 'apartment_code', true);
+
+        $in = get_post_meta($booking_id, 'mphb_check_in_date', true) ?: get_post_meta($booking_id, '_mphb_check_in_date', true);
+        $out = get_post_meta($booking_id, 'mphb_check_out_date', true) ?: get_post_meta($booking_id, '_mphb_check_out_date', true);
+        $nights = ($in && $out) ? (int)round(max(0, strtotime($out) - strtotime($in)) / 86400) : 0;
+        $total = round($nights * $rate, 2);
+
+        $yes_url = self::build_decision_url($booking_id, 'yes');
+        $no_url  = self::build_decision_url($booking_id, 'no');
+
+        $parts = [
+            'Neue Buchungsanfrage',
+            'Hallo ' . ($owner_name ?: 'Vermieter'),
+            'Apartment: ' . ($apt_code ?: $title),
+            'Zeitraum: ' . date('d.m.Y', strtotime($in)) . ' - ' . date('d.m.Y', strtotime($out)),
+            'Nächte: ' . $nights,
+            'Auszahlung: ' . number_format($total, 2, ',', '.') . ' €',
+            'JA: ' . $yes_url,
+            'NEIN: ' . $no_url,
+            'Stay4Fair.com'
+        ];
+
+        // Ensure token exists
+        self::get_or_create_token($booking_id);
+        if ((int)get_post_meta($booking_id, self::META_SENT_AT, true) <= 0) {
+            update_post_meta($booking_id, self::META_SENT_AT, time());
+        }
+
+        return implode(' | ', $parts);
+    }
+
+    /* =========================================================
+     * NOTIFICATIONS (RESTORED GERMAN TEXTS)
+     * ======================================================= */
+    private static function notify_admin_payment_failed(int $booking_id) {
+        $to = self::ADMIN_ALERT_EMAIL;
+        $edit = admin_url('post.php?post='.$booking_id.'&action=edit');
+        $subject = '[Stay4Fair] Zahlungsanforderung fehlgeschlagen – Buchung #'.$booking_id;
+        $body = "Automatische Zahlungsanforderung fehlgeschlagen.\n\nDer Eigentümer hat bestätigt, aber der „Fälliger Saldo“ konnte nicht gesendet werden.\n\nLink: $edit";
+        wp_mail($to, $subject, $body);
+    }
+
+    private static function notify_admin_declined(int $booking_id) {
+        $to = self::ADMIN_ALERT_EMAIL;
+        $edit = admin_url('post.php?post='.$booking_id.'&action=edit');
+        $subject = '[Stay4Fair] Owner hat abgelehnt – Buchung #'.$booking_id;
+        $body = "Der Eigentümer hat die Buchung abgelehnt. Bitte Alternative finden.\n\nLink: $edit";
+        wp_mail($to, $subject, $body);
+    }
+
+    /* =========================================================
+     * HELPERS & SYSTEM
+     * ======================================================= */
+    private static function get_room_type_id($bid) {
+        return (int)get_post_meta($bid, '_mphb_room_type_id', true) ?: (int)get_post_meta($bid, 'mphb_room_type_id', true);
+    }
+
+    private static function is_auto_flow($bid) {
+        return get_post_meta($bid, self::FLOW_META_FALLBACK, true) === 'auto';
+    }
+
+    private static function get_or_create_token($bid) {
+        $t = get_post_meta($bid, self::META_TOKEN, true);
+        if (!$t) { $t = wp_generate_password(24, false); update_post_meta($bid, self::META_TOKEN, $t); }
+        return $t;
+    }
+
+    private static function build_decision_url($bid, $act) {
+        $token = self::get_or_create_token($bid);
+        $sent_at = (int)get_post_meta($bid, self::META_SENT_AT, true) ?: time();
+        $sig = hash_hmac('sha256', $bid.'|'.$act.'|'.$token.'|'.$sent_at, NONCE_SALT);
+        $path = ($act === 'yes') ? self::PAGE_CONFIRM : self::PAGE_DECLINE;
+        return add_query_arg(['b'=>$bid, 'a'=>$act, 't'=>$token, 's'=>$sent_at, 'sig'=>$sig], site_url('/'.$path.'/'));
+    }
+
+    private static function build_wa_link($bid, $text) {
+        $type_id = self::get_room_type_id($bid);
+        $phone = preg_replace('/[^0-9]/', '', (string)get_post_meta($type_id, 'owner_phone', true));
+        if (strpos($phone, '0') === 0) $phone = '49' . substr($phone, 1);
+        return "https://wa.me/$phone?text=" . rawurlencode($text);
+    }
+
+    private static function schedule_payment_reminder($bid) {
+        if (get_post_meta($bid, self::META_REMINDER_SCHEDULED, true)) return;
+        wp_schedule_single_event(time() + (self::REMINDER_AFTER_HOURS * 3600), self::CRON_HOOK_REMINDER, [$bid]);
+        update_post_meta($bid, self::META_REMINDER_SCHEDULED, 1);
+    }
+
+    public static function cron_send_payment_reminder($bid) {
+        if (get_post_meta($bid, self::META_PAYREQ_OK, true) == '1') return;
+        $edit = admin_url('post.php?post='.$bid.'&action=edit');
+        wp_mail(self::ADMIN_ALERT_EMAIL, "[Stay4Fair] Reminder: Payment Request #$bid", "Still not sent. Manual action required: $edit");
+    }
+
+    private static function redirect_clean($args) {
+        wp_safe_redirect(add_query_arg($args, remove_query_arg(['b','a','t','s','sig'])));
+        exit;
+    }
+
+    public static function on_activate() {
+        self::maybe_create_page(self::PAGE_CONFIRM, 'Owner Confirm', '[bsbt_owner_confirm_page]');
+        self::maybe_create_page(self::PAGE_DECLINE, 'Owner Decline', '[bsbt_owner_decline_page]');
+        flush_rewrite_rules();
+    }
+
+    private static function maybe_create_page($s, $t, $c) {
+        if (!get_page_by_path($s)) wp_insert_post(['post_type'=>'page','post_status'=>'publish','post_title'=>$t,'post_name'=>$s,'post_content'=>$c]);
+    }
+
+    public static function shortcode_confirm() { return '<div style="padding:30px; border:1px solid #ccc; border-radius:10px;"><h1>Vielen Dank!</h1><p>Ihre Bestätigung wurde gespeichert.</p></div>'; }
+    public static function shortcode_decline() { return '<div style="padding:30px; border:1px solid #ccc; border-radius:10px;"><h1>Vielen Dank</h1><p>Ihre Ablehnung wurde gespeichert.</p></div>'; }
+}
+
+BSBT_Owner_Automation::init();
