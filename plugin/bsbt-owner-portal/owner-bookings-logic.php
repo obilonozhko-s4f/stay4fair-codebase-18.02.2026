@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: BSBT – Owner Bookings (V7.8.2 – Snapshot + Created Date)
+ * Plugin Name: BSBT – Owner Bookings (V7.8.3 – Pagination Block Only)
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -31,7 +31,7 @@ final class BSBT_Owner_Bookings {
             'bsbt-owner-bookings',
             plugin_dir_url(__FILE__) . 'assets/css/owner-bookings.css',
             [],
-            '7.8.2'
+            '7.8.3'
         );
     }
 
@@ -94,42 +94,42 @@ final class BSBT_Owner_Bookings {
        ========================================================= */
     private function payout(int $booking_id, int $nights): ?float {
 
-    // 1️⃣ Snapshot = истина после подтверждения
-    $snapshot_payout = get_post_meta($booking_id, '_bsbt_snapshot_owner_payout', true);
-    if ($snapshot_payout !== '') {
-        return (float) $snapshot_payout;
+        // 1️⃣ Snapshot = истина после подтверждения
+        $snapshot_payout = get_post_meta($booking_id, '_bsbt_snapshot_owner_payout', true);
+        if ($snapshot_payout !== '') {
+            return (float) $snapshot_payout;
+        }
+
+        if ($nights <= 0) return null;
+
+        // 2️⃣ Берём цену из самой брони (скопировано при создании)
+        $ppn = get_post_meta($booking_id, 'bsbt_owner_price_per_night', true);
+
+        if ($ppn === '') {
+            $ppn = get_post_meta($booking_id, 'owner_price_per_night', true);
+        }
+
+        $ppn = (float) $ppn;
+
+        if ($ppn > 0) {
+            return round($ppn * $nights, 2);
+        }
+
+        // 3️⃣ Крайний fallback — читаем из room_type (только если booking не содержит цену)
+        if (!function_exists('MPHB')) return null;
+
+        $b = MPHB()->getBookingRepository()->findById($booking_id);
+        if (!$b) return null;
+
+        $room = $b->getReservedRooms()[0] ?? null;
+        if (!$room || !method_exists($room,'getRoomTypeId')) return null;
+
+        $room_type_id = (int)$room->getRoomTypeId();
+
+        $ppn_rt = (float) get_post_meta($room_type_id, 'owner_price_per_night', true);
+
+        return $ppn_rt > 0 ? round($ppn_rt * $nights, 2) : null;
     }
-
-    if ($nights <= 0) return null;
-
-    // 2️⃣ Берём цену из самой брони (скопировано при создании)
-    $ppn = get_post_meta($booking_id, 'bsbt_owner_price_per_night', true);
-
-    if ($ppn === '') {
-        $ppn = get_post_meta($booking_id, 'owner_price_per_night', true);
-    }
-
-    $ppn = (float) $ppn;
-
-    if ($ppn > 0) {
-        return round($ppn * $nights, 2);
-    }
-
-    // 3️⃣ Крайний fallback — читаем из room_type (только если booking не содержит цену)
-    if (!function_exists('MPHB')) return null;
-
-    $b = MPHB()->getBookingRepository()->findById($booking_id);
-    if (!$b) return null;
-
-    $room = $b->getReservedRooms()[0] ?? null;
-    if (!$room || !method_exists($room,'getRoomTypeId')) return null;
-
-    $room_type_id = (int)$room->getRoomTypeId();
-
-    $ppn_rt = (float) get_post_meta($room_type_id, 'owner_price_per_night', true);
-
-    return $ppn_rt > 0 ? round($ppn_rt * $nights, 2) : null;
-}
 
     /* =========================
      * RENDER
@@ -146,12 +146,19 @@ final class BSBT_Owner_Bookings {
 
         $countries = class_exists('WC_Countries') ? new WC_Countries() : null;
 
+        /* =========================================================
+         * ✅ ONLY CHANGE #1: Pagination vars + WP_Query args
+         * ======================================================= */
+        $per_page = 25;
+        $paged    = max(1, (int)($_GET['paged'] ?? 1));
+
         $q = new WP_Query([
-            'post_type'=>'mphb_booking',
-            'post_status'=>'any',
-            'posts_per_page'=>-1,
-            'orderby'=>'date',
-            'order'=>'DESC'
+            'post_type'      => 'mphb_booking',
+            'post_status'    => 'any',
+            'posts_per_page' => $per_page,
+            'paged'          => $paged,
+            'orderby'        => 'date',
+            'order'          => 'DESC'
         ]);
 
         ob_start(); ?>
@@ -182,8 +189,8 @@ final class BSBT_Owner_Bookings {
 
                         // 🕒 Created date (always visible)
                         $created_raw = get_post_field('post_date', $bid);
-                        $created_formatted = $created_raw 
-                            ? date_i18n('d.m.Y H:i', strtotime($created_raw)) 
+                        $created_formatted = $created_raw
+                            ? date_i18n('d.m.Y H:i', strtotime($created_raw))
                             : '—';
 
                         [$apt_id,$apt_title,$guests_count] = $this->get_booking_data($bid);
@@ -273,7 +280,7 @@ final class BSBT_Owner_Bookings {
 
                             <td>
                                 <span style="color:<?= $confirmed?'#25D366':(($declined||$expired)?'#d32f2f':'#d32f2f') ?>;font-weight:900;">
-                                    <?php 
+                                    <?php
                                         if($confirmed) echo 'BESTÄTIGT';
                                         elseif($declined) echo 'ABGELEHNT';
                                         elseif($expired) echo 'EXPIRED';
@@ -323,6 +330,30 @@ final class BSBT_Owner_Bookings {
 
                     </tbody>
                 </table>
+
+                <?php
+                /* =========================================================
+                 * ✅ ONLY CHANGE #2: Pagination block under the table (right)
+                 * ======================================================= */
+                if ( $q->max_num_pages > 1 ) {
+
+                    $base_url = remove_query_arg('paged');
+                    $base_url = add_query_arg('paged', '%#%', $base_url);
+
+                    echo '<div style="padding:14px 16px 18px; text-align:right;">';
+                    echo paginate_links([
+                        'base'      => $base_url,
+                        'format'    => '',
+                        'current'   => $paged,
+                        'total'     => (int) $q->max_num_pages,
+                        'type'      => 'plain',
+                        'prev_text' => '←',
+                        'next_text' => '→',
+                    ]);
+                    echo '</div>';
+                }
+                ?>
+
             </div>
         </div>
 
