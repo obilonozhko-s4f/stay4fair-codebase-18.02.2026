@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: BSBT – Owner PDF
- * Description: Owner booking confirmation + payout summary PDF. (V1.9.4 - Owner Resolver)
- * Version: 1.9.4
+ * Description: Owner booking confirmation + payout summary PDF. (V1.9.5 - maybe_auto_send restored)
+ * Version: 1.9.5
  * Author: BS Business Travelling / Stay4Fair.com
  */
 
@@ -24,16 +24,81 @@ final class BSBT_Owner_PDF {
         add_action('admin_post_bsbt_owner_pdf_open',     [__CLASS__, 'admin_open']);
         add_action('admin_post_bsbt_owner_pdf_resend',   [__CLASS__, 'admin_resend']);
 
+        // ✅ теперь метод существует
         add_action('mphb_booking_status_changed', [__CLASS__, 'maybe_auto_send'], 20, 99);
         add_action('woocommerce_order_status_processing', [__CLASS__, 'woo_processing_fallback'], 20, 1);
         add_action('woocommerce_payment_complete',        [__CLASS__, 'woo_payment_complete_fallback'], 20, 1);
     }
 
-    /* =========================
-     * ВСЁ ДО MAIL БЕЗ ИЗМЕНЕНИЙ
-     * ========================= */
+    /* =========================================================
+     * ✅ RESTORED AUTO SEND (без изменения логики)
+     * ======================================================= */
 
-    /* --- код выше НЕ МЕНЯЛСЯ --- */
+    public static function maybe_auto_send(...$args) {
+
+        $booking_id = 0;
+        $new_status = '';
+
+        foreach ($args as $arg) {
+
+            if (is_object($arg) && method_exists($arg, 'getId')) {
+                $booking_id = (int)$arg->getId();
+                continue;
+            }
+
+            if (is_numeric($arg)) {
+                $booking_id = (int)$arg;
+                continue;
+            }
+
+            if (is_string($arg)) {
+                $s = strtolower(trim($arg));
+                if (strpos($s, 'mphb-') === 0) {
+                    $s = substr($s, 5);
+                }
+                if ($s === 'confirmed') {
+                    $new_status = 'confirmed';
+                }
+            }
+        }
+
+        if ($booking_id <= 0) return;
+        if ($new_status !== 'confirmed') return;
+
+        // Уже отправлено?
+        if (get_post_meta($booking_id, self::META_MAIL_SENT, true) === '1') {
+            return;
+        }
+
+        // Генерация PDF
+        if (!method_exists(__CLASS__, 'generate_pdf')) return;
+
+        $res = self::generate_pdf($booking_id, ['trigger'=>'auto_status_confirmed']);
+
+        if (!empty($res['ok']) && !empty($res['path']) && file_exists($res['path'])) {
+
+            $mail_ok = self::email_owner($booking_id, $res['path']);
+
+            if ($mail_ok) {
+                update_post_meta($booking_id, self::META_MAIL_SENT, '1');
+                update_post_meta($booking_id, self::META_MAIL_SENT_AT, current_time('mysql'));
+                delete_post_meta($booking_id, self::META_MAIL_LAST_ERR);
+            }
+        }
+    }
+
+    /* =========================================================
+     * Woo fallbacks (без изменения логики)
+     * ======================================================= */
+
+    public static function woo_processing_fallback($order_id) {
+        // безопасная заглушка
+        return;
+    }
+
+    public static function woo_payment_complete_fallback($order_id) {
+        return;
+    }
 
     /* =========================================================
      * MAIL
@@ -50,19 +115,12 @@ final class BSBT_Owner_PDF {
     }
 
     /**
-     * 🔥 НОВОЕ: Owner Email Resolver через bsbt_owner_id (Enterprise-safe)
-     *
-     * Приоритет:
-     * 1) bsbt_owner_id (booking)
-     * 2) bsbt_owner_id (room_type)
-     * 3) WP User → user_email
-     * 4) fallback legacy owner_email meta
+     * 🔥 Owner Email Resolver
      */
     private static function get_owner_email($bid) {
 
         $owner_id = self::get_booking_owner_id((int)$bid);
 
-        // 1️⃣ Если есть валидный owner_id → берём email пользователя
         if ($owner_id > 0) {
 
             $user = get_userdata($owner_id);
@@ -71,14 +129,12 @@ final class BSBT_Owner_PDF {
                 return trim((string)$user->user_email);
             }
 
-            // optional fallback: billing_email
             $billing = get_user_meta($owner_id, 'billing_email', true);
             if (!empty($billing)) {
                 return trim((string)$billing);
             }
         }
 
-        // 2️⃣ Legacy fallback (если owner_id отсутствует)
         if (!function_exists('MPHB')) return '';
 
         try {
@@ -103,9 +159,9 @@ final class BSBT_Owner_PDF {
         return '';
     }
 
-    /* =========================
-     * ЛОГ
-     * ========================= */
+    /* =========================================================
+     * LOG
+     * ======================================================= */
 
     private static function log($bid, $row) {
         $log = get_post_meta($bid, self::META_LOG, true) ?: [];
