@@ -3,11 +3,11 @@
  * Core логика принятия решений владельцем.
  * Core logic for owner decision making.
  *
- * Version V10.23.7 - Safe Production FINAL
+ * Version V10.24.0 - Remove item-name fallback, add MPHB Payment bridge resolver
  *
  * SCENARIOS / СЦЕНАРИИ:
  * 1) APPROVE  -> Woo capture -> Snapshot payout -> MPHB sync via workflow (не трогаем статус MPHB).
- * 2) DECLINE  -> Woo cancel/refund -> MPHB cancelled (calendar unlock).
+ * 2) DECLINE  -> Woo cancel/void or refund -> MPHB cancelled (calendar unlock).
  * 3) EXPIRE   -> Woo cancel/refund -> MPHB pending (calendar locked for admin investigation).
  */
 
@@ -60,16 +60,15 @@ class BSBT_Owner_Decision_Core {
         try {
 
             // 3) Draft payout snapshot (snapshot-first logic)
-$existing_snapshot = get_post_meta( $booking_id, '_bsbt_snapshot_owner_payout', true );
+            $existing_snapshot = get_post_meta( $booking_id, '_bsbt_snapshot_owner_payout', true );
 
-if ( $existing_snapshot !== '' ) {
-    $payout = (float) $existing_snapshot;
-} else {
-    $payout = self::calculate_payout( $booking_id );
-}
+            if ( $existing_snapshot !== '' ) {
+                $payout = (float) $existing_snapshot;
+            } else {
+                $payout = self::calculate_payout( $booking_id );
+            }
 
-update_post_meta( $booking_id, '_bsbt_snapshot_owner_payout_draft', $payout );
-
+            update_post_meta( $booking_id, '_bsbt_snapshot_owner_payout_draft', $payout );
 
             // 4) Find Woo order
             $order = self::find_order_for_booking( $booking_id );
@@ -299,60 +298,147 @@ update_post_meta( $booking_id, '_bsbt_snapshot_owner_payout_draft', $payout );
     }
 
     /* =========================================================
-     * ORDER FINDER (Meta + Deep Scan)
+     * ORDER FINDER (Meta + Payment Bridge)
      * ========================================================= */
 
     /**
      * Find Woo order by booking id:
      * 1) meta lookup (fast) including our welded key
-     * 2) deep fallback by item name "Reservation #ID"
+     * 2) meta lookup for _mphb_booking_id (if present)
+     * 3) MPHB Payment bridge: booking_id -> mphb_payment_id -> woocommerce itemmeta -> order_id
+     *
+     * NOTE:
+     * RU: УБРАЛИ fallback по item name "Reservation #ID" — слишком рискованно.
+     * EN: Removed item-name fallback — too risky for production.
      */
     private static function find_order_for_booking( int $booking_id ): ?WC_Order {
 
+        if ( $booking_id <= 0 ) return null;
         if ( ! function_exists('wc_get_orders') ) return null;
 
-        $statuses  = array_keys( wc_get_order_statuses() );
+        $statuses = array_keys( wc_get_order_statuses() );
 
-        // 1) meta lookup (fast)
-        $meta_keys = [ self::META_BSBT_REF, '_mphb_booking_id' ];
-
-        foreach ( $meta_keys as $key ) {
-            $orders = wc_get_orders([
-                'limit'      => 1,
-                'meta_key'   => $key,
-                'meta_value' => $booking_id,
-                'status'     => $statuses,
-                'orderby'    => 'date',
-                'order'      => 'DESC',
-            ]);
-
-            if ( ! empty($orders) && $orders[0] instanceof WC_Order ) {
-                return $orders[0];
-            }
-        }
-
-        // 2) deep fallback
-        $needle = 'Reservation #' . $booking_id;
-
-        $recent_orders = wc_get_orders([
-            'limit'   => 30,
-            'status'  => $statuses,
-            'orderby' => 'date',
-            'order'   => 'DESC',
+        // 1) meta lookup (fast): welded booking id
+        $orders = wc_get_orders([
+            'limit'      => 1,
+            'meta_key'   => self::META_BSBT_REF,
+            'meta_value' => $booking_id,
+            'status'     => $statuses,
+            'orderby'    => 'date',
+            'order'      => 'DESC',
         ]);
 
-        foreach ( $recent_orders as $order ) {
-            if ( ! ($order instanceof WC_Order) ) continue;
+        if ( ! empty($orders) && $orders[0] instanceof WC_Order ) {
+            return $orders[0];
+        }
 
-            foreach ( $order->get_items() as $item ) {
-                $name = (string) $item->get_name();
-                if ( $name && strpos( $name, $needle ) !== false ) {
-                    return $order;
-                }
+        // 2) meta lookup: some bridges store booking id on order
+        $orders = wc_get_orders([
+            'limit'      => 1,
+            'meta_key'   => '_mphb_booking_id',
+            'meta_value' => $booking_id,
+            'status'     => $statuses,
+            'orderby'    => 'date',
+            'order'      => 'DESC',
+        ]);
+
+        if ( ! empty($orders) && $orders[0] instanceof WC_Order ) {
+            return $orders[0];
+        }
+
+        // 3) MPHB Payment bridge: booking -> payment -> order
+        $order_id = self::resolve_order_id_via_mphb_payment_bridge( $booking_id );
+        if ( $order_id > 0 ) {
+            $order = wc_get_order( $order_id );
+            if ( $order instanceof WC_Order ) {
+                return $order;
             }
         }
 
         return null;
+    }
+
+    /**
+     * Resolve Woo order_id via MPHB payment:
+     * booking_id -> mphb_payment_id -> woocommerce_order_itemmeta (_mphb_payment_id) -> order_id
+     */
+    private static function resolve_order_id_via_mphb_payment_bridge( int $booking_id ): int {
+
+        if ( $booking_id <= 0 ) return 0;
+
+        global $wpdb;
+
+        // 1) Find latest MPHB payment post ID for this booking
+        $payments = get_posts([
+            'post_type'      => 'mphb_payment',
+            'post_status'    => 'any',
+            'posts_per_page' => 1,
+            'fields'         => 'ids',
+            'orderby'        => 'ID',
+            'order'          => 'DESC',
+            'meta_query'     => [
+                [
+                    'key'     => '_mphb_booking_id',
+                    'value'   => (string) $booking_id,
+                    'compare' => '=',
+                ],
+            ],
+        ]);
+
+        $payment_id = ! empty($payments) ? (int) $payments[0] : 0;
+
+        // Some installs store as mphb_booking_id (without underscore)
+        if ( $payment_id <= 0 ) {
+            $payments = get_posts([
+                'post_type'      => 'mphb_payment',
+                'post_status'    => 'any',
+                'posts_per_page' => 1,
+                'fields'         => 'ids',
+                'orderby'        => 'ID',
+                'order'          => 'DESC',
+                'meta_query'     => [
+                    [
+                        'key'     => 'mphb_booking_id',
+                        'value'   => (string) $booking_id,
+                        'compare' => '=',
+                    ],
+                ],
+            ]);
+
+            $payment_id = ! empty($payments) ? (int) $payments[0] : 0;
+        }
+
+        if ( $payment_id <= 0 ) {
+            return 0;
+        }
+
+        // 2) Query order_id from Woo tables by mphb payment id
+        $table_itemmeta = $wpdb->prefix . 'woocommerce_order_itemmeta';
+        $table_items    = $wpdb->prefix . 'woocommerce_order_items';
+
+        // Safety: check tables exist
+        $exists_itemmeta = (string) $wpdb->get_var( $wpdb->prepare("SHOW TABLES LIKE %s", $table_itemmeta) );
+        $exists_items    = (string) $wpdb->get_var( $wpdb->prepare("SHOW TABLES LIKE %s", $table_items) );
+
+        if ( $exists_itemmeta !== $table_itemmeta || $exists_items !== $table_items ) {
+            return 0;
+        }
+
+        $sql = "
+            SELECT oi.order_id
+            FROM {$table_itemmeta} oim
+            JOIN {$table_items} oi ON oi.order_item_id = oim.order_item_id
+            WHERE oim.meta_key = %s
+              AND oim.meta_value = %s
+            ORDER BY oi.order_id DESC
+            LIMIT 1
+        ";
+
+        $order_id = (int) $wpdb->get_var(
+            $wpdb->prepare( $sql, '_mphb_payment_id', (string) $payment_id )
+        );
+
+        return $order_id > 0 ? $order_id : 0;
     }
 
     /* =========================================================
