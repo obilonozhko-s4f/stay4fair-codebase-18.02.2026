@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: BSBT – Owner Login & Portal Access
- * Description: Версия 2.3.2: Центровка футера формы (Passwort vergessen).
- * Version: 2.3.2
+ * Description: Version 2.4.1 – CSRF protected logout + stable CSS.
+ * Version: 2.4.1
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -22,9 +22,24 @@ final class BSBT_Owner_Login_System {
         add_action( 'woocommerce_lostpassword_form', [ $this, 'add_back_to_login_link' ] );
     }
 
-    /* ... handle_owner_logout, translate_wc_texts, add_back_to_login_link остаются без изменений ... */
+    /**
+     * =========================================================
+     * CSRF-SAFE LOGOUT
+     * =========================================================
+     */
     public function handle_owner_logout() {
-        if ( isset($_GET['action']) && $_GET['action'] === 'owner_logout' ) {
+
+        if (
+            isset($_GET['action']) &&
+            $_GET['action'] === 'owner_logout'
+        ) {
+
+            $nonce = isset($_GET['_wpnonce']) ? $_GET['_wpnonce'] : '';
+
+            if ( ! wp_verify_nonce( $nonce, 'bsbt_owner_logout' ) ) {
+                wp_die('Security check failed.');
+            }
+
             wp_logout();
             wp_safe_redirect( site_url('/owner-login/?logout=success') );
             exit;
@@ -51,6 +66,7 @@ final class BSBT_Owner_Login_System {
     }
 
     public function render_login_form() {
+
         if ( is_user_logged_in() ) {
             $user = wp_get_current_user();
             if ( in_array('owner', (array)$user->roles, true) || current_user_can('manage_options') ) {
@@ -65,6 +81,7 @@ final class BSBT_Owner_Login_System {
         if ( ! $redirect_to ) $redirect_to = site_url('/owner-dashboard/');
 
         if ( $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bsbt_login_submit']) ) {
+
             $post_redirect = isset($_POST['redirect_to']) ? wp_validate_redirect(wp_unslash($_POST['redirect_to']), '') : '';
             if ( $post_redirect ) $redirect_to = $post_redirect;
 
@@ -121,8 +138,12 @@ final class BSBT_Owner_Login_System {
         <?php return ob_get_clean();
     }
 
+    /**
+     * =========================================================
+     * GLOBAL STYLES (stable, no page condition)
+     * =========================================================
+     */
     public function inject_global_styles() {
-        if ( ! is_page('owner-login') && ! is_page('lost-password') ) return;
         ?>
         <style>
         .bsbt-login-page-wrapper { display:flex; align-items:center; justify-content:center; min-height:80vh; padding:40px 20px; background:#fff; }
@@ -141,7 +162,6 @@ final class BSBT_Owner_Login_System {
         }
         .bsbt-cta-button:hover { background-color: <?= $this->gold ?>; color: <?= $this->navy ?>; transform:translateY(-2px); }
 
-        /* ЦЕНТРОВКА И ОТСТУП ДЛЯ ССЫЛКИ */
         .bsbt-form-footer {
             margin-top: 25px;
             text-align: center;
