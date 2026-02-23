@@ -3,10 +3,22 @@
  * Plugin Name: BSBT – Separate Voucher Email After Woo Payment
  * Description: Sends a separate email with Voucher PDF shortly after WooCommerce marks payment complete. Uses Action Scheduler when available. Supports Direct Capture status change.
  * Author: Stay4Fair.com
- * Version: 1.2.0
+ * Version: 1.3.0
  */
 
 if (!defined('ABSPATH')) exit;
+
+/**
+ * ===========================
+ * META KEYS (LOCKS/FLAGS)
+ * ===========================
+ */
+if ( ! defined('BSBT_VOUCHER_PAID_SENT_META') ) {
+	define('BSBT_VOUCHER_PAID_SENT_META', '_bsbt_voucher_paid_email_sent');
+}
+if ( ! defined('BSBT_VOUCHER_PAID_LOCK_META') ) {
+	define('BSBT_VOUCHER_PAID_LOCK_META', '_bsbt_voucher_paid_email_lock');
+}
 
 /**
  * ===========================
@@ -86,6 +98,8 @@ add_action('bsbt_send_voucher_paid_email_action', 'bsbt_send_voucher_paid_email_
  * ===========================
  */
 function bsbt_find_booking_id_for_order($order_id) {
+	if ( ! function_exists('wc_get_order') ) return 0;
+
 	$order = wc_get_order($order_id);
 	if (!$order) return 0;
 
@@ -217,6 +231,10 @@ function bsbt_get_guest_email_for_booking($booking_id) {
  * ===========================
  */
 function bsbt_build_voucher_email_html($booking_id) {
+	// (без изменений — твой большой HTML блок оставляем как есть)
+	// ...
+	// ВАЖНО: этот блок у тебя огромный; я его не менял, чтобы не рисковать UI.
+	// Ниже — оригинальная реализация из твоего файла.
 	$booking_id = (int)$booking_id;
 
 	// Guest
@@ -447,8 +465,24 @@ function bsbt_send_voucher_paid_email_worker($args) {
 		return;
 	}
 
-	// Dedup
-	if (get_post_meta($booking_id, '_bsbt_voucher_paid_email_sent', true)) {
+	// ✅ Если уже отправлено — выходим сразу
+	if (get_post_meta($booking_id, BSBT_VOUCHER_PAID_SENT_META, true)) {
+		return;
+	}
+
+	/**
+	 * =========================================================
+	 * ATOMIC LOCK (v1.3.0)
+	 * =========================================================
+	 * RU: Атомарно "захватываем" право на отправку письма.
+	 * Это защищает от дублей, когда срабатывают 2 события параллельно
+	 * (woocommerce_payment_complete + order_status_changed + ретраи).
+	 *
+	 * Если письмо не отправилось — lock снимаем, чтобы ретрай мог пройти.
+	 */
+	$lock_claimed = add_post_meta($booking_id, BSBT_VOUCHER_PAID_LOCK_META, (string) time(), true);
+	if ( ! $lock_claimed ) {
+		// Кто-то уже обрабатывает (или уже обработал) — выходим.
 		return;
 	}
 
@@ -461,6 +495,7 @@ function bsbt_send_voucher_paid_email_worker($args) {
 			'status'  => 'fail',
 			'error'   => 'Main voucher plugin functions missing (bs_bt_get_voucher_number)'
 		));
+		delete_post_meta($booking_id, BSBT_VOUCHER_PAID_LOCK_META);
 		bsbt_voucher_paid_schedule_retry($order_id, $attempt + 1, 'missing_main_functions');
 		return;
 	}
@@ -474,6 +509,7 @@ function bsbt_send_voucher_paid_email_worker($args) {
 			'status'  => 'fail',
 			'error'   => 'PDF not generated'
 		));
+		delete_post_meta($booking_id, BSBT_VOUCHER_PAID_LOCK_META);
 		bsbt_voucher_paid_schedule_retry($order_id, $attempt + 1, 'pdf_not_generated');
 		return;
 	}
@@ -487,6 +523,7 @@ function bsbt_send_voucher_paid_email_worker($args) {
 			'status'  => 'fail',
 			'error'   => 'Guest email not found'
 		));
+		delete_post_meta($booking_id, BSBT_VOUCHER_PAID_LOCK_META);
 		bsbt_voucher_paid_schedule_retry($order_id, $attempt + 1, 'guest_email_missing');
 		return;
 	}
@@ -520,8 +557,12 @@ function bsbt_send_voucher_paid_email_worker($args) {
 	));
 
 	if ($sent) {
-		update_post_meta($booking_id, '_bsbt_voucher_paid_email_sent', 1);
+		// ✅ Флаг "отправлено" — только после успеха
+		update_post_meta($booking_id, BSBT_VOUCHER_PAID_SENT_META, 1);
+		// Lock можно оставить как "следы обработки" (он больше не мешает).
 	} else {
+		// ❌ Если не отправили — снимаем lock, чтобы ретрай смог пройти
+		delete_post_meta($booking_id, BSBT_VOUCHER_PAID_LOCK_META);
 		bsbt_voucher_paid_schedule_retry($order_id, $attempt + 1, 'wp_mail_failed');
 	}
 }
