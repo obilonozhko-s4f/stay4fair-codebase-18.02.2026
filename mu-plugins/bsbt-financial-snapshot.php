@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: BSBT – Financial Snapshot (Enterprise Stable)
- * Version: 2.6.0
- * Description: Замораживает финансовые показатели (Snapshot) при подтверждении брони. 
+ * Version: 2.7.0
+ * Description: Замораживает финансовые показатели (Snapshot) при подтверждении брони.
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -44,7 +44,7 @@ function bsbt_snapshot_on_confirmed($new_status, $old_status, $post) {
     $check_out = get_post_meta($booking_id, 'mphb_check_out_date', true);
 
     if ( ! $check_in || ! $check_out ) return;
-    
+
     $ts_in  = strtotime($check_in);
     $ts_out = strtotime($check_out);
 
@@ -106,16 +106,18 @@ function bsbt_snapshot_on_confirmed($new_status, $old_status, $post) {
         '_bsbt_snapshot_fee_vat_total'   => $fee_vat,
         '_bsbt_snapshot_fee_gross_total' => $fee_gross,
         '_bsbt_snapshot_locked_at'       => current_time('mysql'),
-        '_bsbt_snapshot_version'         => '2.6.0', // Обновлена версия
+        '_bsbt_snapshot_version'         => '2.7.0', // Обновлена версия
     ];
 
     foreach ( $snapshot as $key => $val ) {
         update_post_meta($booking_id, $key, $val);
     }
 
-    // 10. Синхронизация статуса решения (Decision)
-    $current_decision = get_post_meta($booking_id, '_bsbt_owner_decision', true);
-    if ( ! $current_decision ) {
-        update_post_meta($booking_id, '_bsbt_owner_decision', 'approved');
-    }
+    /**
+     * 10. Decision (Source of Truth)
+     * RU: Snapshot НЕ должен писать _bsbt_owner_decision.
+     * Source of Truth для decision — только owner-decision-core (approve/capture flow).
+     * Это устраняет гонки, когда "approved" появляется вне capture-логики.
+     */
+    // intentionally no-op
 }
