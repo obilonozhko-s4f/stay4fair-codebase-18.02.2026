@@ -105,9 +105,17 @@ if (!function_exists('bsbt_owner_pdf_open_handler')) {
 		bsbt_check_nonce($booking_id);
 		bsbt_stream_pdf($booking_id, 'inline');
 	}
-	if (!has_action('admin_post_bsbt_owner_pdf_open', 'bsbt_owner_pdf_open_handler')) {
-		add_action('admin_post_bsbt_owner_pdf_open', 'bsbt_owner_pdf_open_handler');
-	}
+
+	/**
+	 * =========================================================
+	 * NOTE (2026): Route collision fix
+	 * =========================================================
+	 * RU: admin_post_bsbt_owner_pdf_open обслуживается плагином BSBT_Owner_PDF.
+	 * Этот owner-suite handler оставлен как legacy-функция, но НЕ регистрируется,
+	 * чтобы исключить конфликт маршрутов (два обработчика одного admin_post).
+	 */
+	// Intentionally not registering:
+	// add_action('admin_post_bsbt_owner_pdf_open', 'bsbt_owner_pdf_open_handler');
 }
 
 /** DOWNLOAD (PDF file) */
