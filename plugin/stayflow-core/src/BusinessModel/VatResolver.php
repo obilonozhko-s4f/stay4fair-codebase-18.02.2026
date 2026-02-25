@@ -6,12 +6,8 @@ namespace StayFlow\BusinessModel;
 
 final class VatResolver
 {
-    public function resolveVatProfile(string $businessModel): string
+    public function vatOnFee(string $model): bool
     {
-        return match ($businessModel) {
-            'model_b' => 'vat_on_fee',
-            'model_c' => 'included',
-            default => 'margin',
-        };
+        return $model === 'model_b';
     }
 }
