@@ -6,8 +6,12 @@ namespace StayFlow\BusinessModel;
 
 final class VatResolver
 {
-    public function vatOnFee(string $model): bool
+    /**
+     * RU: В Model B НДС применяется только к комиссии платформы.
+     * В Model A профиль VAT в рамках этой логики не решаем (это уровень инвойсов/учёта).
+     */
+    public function isVatOnFee(string $businessModel): bool
     {
-        return $model === 'model_b';
+        return trim(strtolower($businessModel)) === 'model_b';
     }
 }
