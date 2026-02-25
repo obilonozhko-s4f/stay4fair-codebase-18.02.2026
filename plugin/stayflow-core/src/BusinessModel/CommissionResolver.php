@@ -4,22 +4,47 @@ declare(strict_types=1);
 
 namespace StayFlow\BusinessModel;
 
+/**
+ * RU:
+ * Финальная чистая реализация Model B (commission-inside).
+ *
+ * Источник цены = Rates (season_prices).
+ * Owner_price не используется как источник истины.
+ *
+ * EN:
+ * Final clean Model B implementation (commission-inside).
+ * Source of truth = Rates (season_prices).
+ */
 final class CommissionResolver
 {
-    public function resolveFinalGrossPrice(float $ownerPrice, string $commissionMode): float
+    /**
+     * owner_price  = цена гостя (из Rates)
+     * commission   = owner_price * BSBT_FEE
+     * vat          = commission * BSBT_VAT_ON_FEE
+     * owner_payout = owner_price - commission
+     */
+    public function resolveModelB(float $guestPrice): array
     {
-        if ($ownerPrice <= 0) {
-            return 0.0;
+        $guestPrice = round(max(0.0, $guestPrice), 2);
+
+        if ($guestPrice <= 0.0) {
+            return [
+                'guest_price'  => 0.0,
+                'commission'   => 0.0,
+                'vat'          => 0.0,
+                'owner_payout' => 0.0,
+            ];
         }
 
-        if ($commissionMode !== 'over') {
-            return round($ownerPrice, 2);
-        }
+        $commission  = round($guestPrice * BSBT_FEE, 2);
+        $vat         = round($commission * BSBT_VAT_ON_FEE, 2);
+        $ownerPayout = round($guestPrice - $commission, 2);
 
-        /**
-         * RU: Для Model B сохраняем легаси-формулу:
-         * owner + owner * fee * (1 + vat)
-         */
-        return round($ownerPrice + ($ownerPrice * BSBT_FEE * (1 + BSBT_VAT_ON_FEE)), 2);
+        return [
+            'guest_price'  => $guestPrice,
+            'commission'   => $commission,
+            'vat'          => $vat,
+            'owner_payout' => $ownerPayout,
+        ];
     }
 }
