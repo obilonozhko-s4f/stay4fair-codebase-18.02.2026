@@ -4,47 +4,14 @@ declare(strict_types=1);
 
 namespace StayFlow\BusinessModel;
 
-/**
- * RU:
- * Финальная чистая реализация Model B (commission-inside).
- *
- * Источник цены = Rates (season_prices).
- * Owner_price не используется как источник истины.
- *
- * EN:
- * Final clean Model B implementation (commission-inside).
- * Source of truth = Rates (season_prices).
- */
-final class CommissionResolver
+final class VatResolver
 {
     /**
-     * owner_price  = цена гостя (из Rates)
-     * commission   = owner_price * BSBT_FEE
-     * vat          = commission * BSBT_VAT_ON_FEE
-     * owner_payout = owner_price - commission
+     * RU: В Model B НДС применяется только к комиссии платформы.
+     * В Model A профиль VAT в рамках этой логики не решаем (это уровень инвойсов/учёта).
      */
-    public function resolveModelB(float $guestPrice): array
+    public function isVatOnFee(string $businessModel): bool
     {
-        $guestPrice = round(max(0.0, $guestPrice), 2);
-
-        if ($guestPrice <= 0.0) {
-            return [
-                'guest_price'  => 0.0,
-                'commission'   => 0.0,
-                'vat'          => 0.0,
-                'owner_payout' => 0.0,
-            ];
-        }
-
-        $commission  = round($guestPrice * BSBT_FEE, 2);
-        $vat         = round($commission * BSBT_VAT_ON_FEE, 2);
-        $ownerPayout = round($guestPrice - $commission, 2);
-
-        return [
-            'guest_price'  => $guestPrice,
-            'commission'   => $commission,
-            'vat'          => $vat,
-            'owner_payout' => $ownerPayout,
-        ];
+        return trim(strtolower($businessModel)) === 'model_b';
     }
 }
