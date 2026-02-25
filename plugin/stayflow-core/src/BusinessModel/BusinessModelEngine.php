@@ -8,9 +8,13 @@ final class BusinessModelEngine
 {
     private static ?self $instance = null;
 
-    public function __construct(
-        private readonly VatResolver $vatResolver = new VatResolver(),
-    ) {
+    private VatResolver $vatResolver;
+    private WooTaxAdapter $wooTaxAdapter;
+
+    public function __construct()
+    {
+        $this->vatResolver   = new VatResolver();
+        $this->wooTaxAdapter = new WooTaxAdapter();
     }
 
     public static function instance(): self
@@ -33,8 +37,20 @@ final class BusinessModelEngine
         return trim(strtolower($businessModel)) === 'model_b';
     }
 
+    /**
+     * RU: Доступ к VAT-логике.
+     */
     public function vat(): VatResolver
     {
         return $this->vatResolver;
+    }
+
+    /**
+     * RU: Возвращаем WooTaxAdapter для совместимости ServiceProvider.
+     * EN: Kept for backward compatibility.
+     */
+    public function wooTax(): WooTaxAdapter
+    {
+        return $this->wooTaxAdapter;
     }
 }
