@@ -127,6 +127,9 @@ h1 {
     <div class="label">Apartment</div>
     <div class="value">
         <?php echo $e($d['apt_title']); ?> (ID <?php echo $e($d['apt_id']); ?>)
+        <?php if (!empty($d['wohnungs_id'])) : ?>
+            · Wohnungs-ID: <?php echo $e($d['wohnungs_id']); ?>
+        <?php endif; ?>
     </div>
     <div class="note" style="margin-top:6px">
         Adresse: <?php echo $e($d['apt_address']); ?><br>
@@ -159,7 +162,7 @@ h1 {
     </div>
 </div>
 
-<!-- NEW: Brutto price -->
+<!-- Brutto price -->
 <div class="box">
     <div class="label">Brutto-Buchungspreis (Gast)</div>
     <div class="value">
@@ -178,25 +181,25 @@ h1 {
 <div class="box">
     <div class="label">Provision & Vermittlungsgebühr</div>
     <div class="note">
-        Provision: <?php echo $e($d['pricing']['commission_rate'] * 100); ?> %<br>
-        Provision (netto): <?php echo $e(number_format($d['pricing']['commission_net_total'], 2, ',', '.')); ?> €<br>
-        MwSt auf Provision (19%): <?php echo $e(number_format($d['pricing']['commission_vat_total'], 2, ',', '.')); ?> €<br>
-        <strong>Provision (brutto): <?php echo $e(number_format($d['pricing']['commission_gross_total'], 2, ',', '.')); ?> €</strong>
+        Provision: <?php echo $e(($d['pricing']['commission_rate'] ?? 0) * 100); ?> %<br>
+        Provision (netto): <?php echo $e(number_format((float)($d['pricing']['commission_net_total'] ?? 0), 2, ',', '.')); ?> €<br>
+        MwSt auf Provision (19%): <?php echo $e(number_format((float)($d['pricing']['commission_vat_total'] ?? 0), 2, ',', '.')); ?> €<br>
+        <strong>Provision (brutto): <?php echo $e(number_format((float)($d['pricing']['commission_gross_total'] ?? 0), 2, ',', '.')); ?> €</strong>
     </div>
 </div>
 <?php endif; ?>
 
-<!-- Steuer Hinweis (freundlich formuliert) -->
+<!-- Steuer Hinweis -->
 <div class="box">
     <div class="label">Auszahlung & steuerliche Hinweise</div>
     <div class="note">
         Die Auszahlung erfolgt in der Regel innerhalb von 3–7 Werktagen nach Abreise des Gastes.<br><br>
 
-        Wir freuen uns über Ihre erfolgreichen Buchungen! Bitte beachten Sie, dass die erzielten Einkünfte aus der kurzfristigen Vermietung steuerpflichtig sind. Die Verantwortung für die korrekte Versteuerung sowie die Einhaltung aller steuerlichen Meldepflichten liegt gemäß den gesetzlichen Vorgaben beim Vermieter.
+        Wir freuen uns über Ihre erfolgreichen Buchungen! Bitte beachten Sie, dass die erzielten Einkünfte aus der kurzfristigen Vermietung steuerpflichtig sind. Die Verantwortung für die korrekte Versteuerung sowie die Einhaltung aller steuerlichen Meldepflichten liegt gemäß den gesetzlichen Vorgaben beim Vermieter.<br><br>
 
-Ein besonderer Hinweis zum Beherbergungsteuer (City Tax): > Bitte prüfen Sie eigenständig die lokalen Satzungen Ihrer Stadt. In vielen Regionen sind Vermieter verpflichtet, diese Steuer ordnungsgemäß zu erfassen und abzuführen. Da die Handhabung je nach Aufenthaltszweck (geschäftlich oder privat) variieren kann, liegt die finale Prüfung und Abwicklung ausschließlich in Ihrer Hand.
+        Ein besonderer Hinweis zum Beherbergungsteuer (City Tax): Bitte prüfen Sie eigenständig die lokalen Satzungen Ihrer Stadt. In vielen Regionen sind Vermieter verpflichtet, diese Steuer ordnungsgemäß zu erfassen und abzuführen. Da die Handhabung je nach Aufenthaltszweck (geschäftlich oder privat) variieren kann, liegt die finale Prüfung und Abwicklung ausschließlich in Ihrer Hand.<br><br>
 
-Stay4Fair unterstützt Sie mit der Bereitstellung der Buchungsdaten, übernimmt jedoch keine steuerliche Beratung oder Haftung.
+        Stay4Fair unterstützt Sie mit der Bereitstellung der Buchungsdaten, übernimmt jedoch keine steuerliche Beratung oder Haftung.
     </div>
 </div>
 
