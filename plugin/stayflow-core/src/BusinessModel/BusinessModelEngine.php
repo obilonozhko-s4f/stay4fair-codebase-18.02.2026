@@ -8,21 +8,33 @@ final class BusinessModelEngine
 {
     private static ?self $instance = null;
 
+    public function __construct(
+        private readonly VatResolver $vatResolver = new VatResolver(),
+    ) {
+    }
+
     public static function instance(): self
     {
         if (self::$instance === null) {
             self::$instance = new self();
         }
+
         return self::$instance;
     }
 
-    public function isModelB(string $model): bool
+    public function isModelA(string $businessModel): bool
     {
-        return $model === 'model_b';
+        $m = trim(strtolower($businessModel));
+        return $m === '' || $m === 'model_a';
     }
 
-    public function isModelA(string $model): bool
+    public function isModelB(string $businessModel): bool
     {
-        return $model !== 'model_b';
+        return trim(strtolower($businessModel)) === 'model_b';
+    }
+
+    public function vat(): VatResolver
+    {
+        return $this->vatResolver;
     }
 }
