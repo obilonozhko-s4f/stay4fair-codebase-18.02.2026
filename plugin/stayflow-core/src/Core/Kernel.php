@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace StayFlow\Core;
 
 use StayFlow\Admin\Menu;
+use StayFlow\BusinessModel\BusinessModelServiceProvider;
 use StayFlow\CPT\OwnerPostType;
 use StayFlow\FeatureFlags\FeatureFlagStore;
 use StayFlow\Settings\SettingsStore;
@@ -22,5 +23,7 @@ final class Kernel
         add_action('admin_init', [$settingsStore, 'register']);
         add_action('admin_init', [$featureFlagStore, 'register']);
         add_action('admin_menu', [$menu, 'register']);
+
+        (new BusinessModelServiceProvider())->boot();
     }
 }
